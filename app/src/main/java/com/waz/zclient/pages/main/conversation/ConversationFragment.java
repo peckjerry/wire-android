@@ -51,7 +51,6 @@ import android.view.ViewGroup;
 import android.view.animation.Animation;
 import android.widget.AbsListView;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -141,12 +140,7 @@ import com.waz.zclient.pages.main.conversation.views.ExpandableView;
 import com.waz.zclient.pages.main.conversation.views.MessageBottomSheetDialog;
 import com.waz.zclient.pages.main.conversation.views.MessageViewsContainer;
 import com.waz.zclient.pages.main.conversation.views.header.StreamMediaPlayerBarFragment;
-import com.waz.zclient.pages.main.conversation.views.listview.ConversationListView;
 import com.waz.zclient.pages.main.conversation.views.listview.ConversationScrollListener;
-import com.waz.zclient.pages.main.conversation.views.row.message.MessageViewController;
-import com.waz.zclient.pages.main.conversation.views.row.message.views.ImageMessageViewController;
-import com.waz.zclient.pages.main.conversation.views.row.message.views.MediaPlayerViewController;
-import com.waz.zclient.pages.main.conversation.views.row.message.views.YouTubeMessageViewController;
 import com.waz.zclient.pages.main.conversationlist.ConversationListAnimation;
 import com.waz.zclient.pages.main.conversationpager.controller.SlidingPaneObserver;
 import com.waz.zclient.pages.main.onboarding.OnBoardingHintFragment;
@@ -227,9 +221,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
     private static final String[] SAVE_IMAGE_PERMISSIONS = new String[] {android.Manifest.permission.WRITE_EXTERNAL_STORAGE};
     private static final int SAVE_IMAGE_PERMISSION_REQUEST_ID = 6;
 
-    private ConversationListView listView;
-    private MessageAdapter messageAdapter;
-    private MessageStreamManager messageStreamManager;
     private InputStateIndicator inputStateIndicator;
     private UpdateListener typingListener;
 
@@ -492,9 +483,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        if (messageStreamManager != null) {
-            messageStreamManager.onConfigurationChanged(getContext(), messageAdapter);
-        }
 
         if (BuildConfig.SHOW_MENTIONING) {
             getControllerFactory().getMentioningController().hide();
@@ -502,11 +490,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
         audioMessageRecordingView.requestLayout();
         audioMessageRecordingView.invalidate();
-
-        if (LayoutSpec.isTablet(getContext()) && listView != null && messageAdapter != null) {
-            // To clear ListView cache as we use different views for portrait and landscape
-            listView.setAdapter(messageAdapter);
-        }
 
         if (ViewUtils.isInLandscape(newConfig)) {
             toolbar.setNavigationIcon(null);
@@ -583,34 +566,11 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
                                      .commit();
         }
 
-        listView = ViewUtils.getView(view, R.id.clv__conversation_list_view);
-        listView.setVerticalScrollBarEnabled(false);
-        listView.setRecyclerListener(new AbsListView.RecyclerListener() {
-            @Override
-            public void onMovedToScrapHeap(View view) {
-                if (view == null || view.getTag() == null || !(view.getTag() instanceof MessageViewController)) {
-                    return;
-                }
-                MessageViewController viewTag = (MessageViewController) view.getTag();
-                // We want to ignore those because it looks weird if the images and so on fades in again
-                if (viewTag instanceof ImageMessageViewController || viewTag instanceof YouTubeMessageViewController || viewTag instanceof MediaPlayerViewController) {
-                    return;
-                }
-                viewTag.recycle();
-            }
-        });
-
-        messageAdapter = new MessageAdapter(this);
-        listView.setAdapter(messageAdapter);
-        messageStreamManager = new MessageStreamManager(listView, messageAdapter);
-
         // invisible footer to scroll over inputfield
         invisibleFooter = new FrameLayout(getActivity());
         AbsListView.LayoutParams params = new AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                                                                        getResources().getDimensionPixelSize(R.dimen.cursor__list_view_footer__height));
         invisibleFooter.setLayoutParams(params);
-
-        listView.addFooterView(invisibleFooter, null, false);
 
         cursorLayout.showSendButton(false);
 
@@ -656,7 +616,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
         syncIndicatorModelObserver.resumeListening();
         audioMessageRecordingView.setDarkTheme(getControllerFactory().getThemeController().isDarkTheme());
 
-        getControllerFactory().getConversationScreenController().setConversationStreamUiReady(messageStreamManager.getCount() > 0);
         if (!getControllerFactory().getConversationScreenController().isConversationStreamUiInitialized()) {
             getStoreFactory().getConversationStore().addConversationStoreObserverAndUpdate(this);
         } else {
@@ -670,8 +629,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
         getControllerFactory().getStreamMediaPlayerController().addStreamMediaBarObserver(this);
         getControllerFactory().getAccentColorController().addAccentColorObserver(this);
         getStoreFactory().getParticipantsStore().addParticipantsStoreObserver(this);
-        listView.registerScrolledToBottomListener(this);
-        listView.registVisibleMessagesChangedListener(this);
         getControllerFactory().getGlobalLayoutController().addKeyboardVisibilityObserver(this);
         getStoreFactory().getInAppNotificationStore().addInAppNotificationObserver(this);
 
@@ -737,8 +694,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
         getStoreFactory().getConversationStore().removeConversationStoreObserver(this);
         getControllerFactory().getAccentColorController().removeAccentColorObserver(this);
         getControllerFactory().getNavigationController().removeNavigationControllerObserver(this);
-        listView.unregistVisibleMessagesChangedListener(this);
-        listView.unregisterScrolledToBottomListener(this);
         getControllerFactory().getSlidingPaneController().removeObserver(this);
         getControllerFactory().getConversationScreenController().setConversationStreamUiReady(false);
         getControllerFactory().getRequestPermissionsController().removeObserver(this);
@@ -748,8 +703,7 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
     @Override
     public void onDestroyView() {
         containerPreview = null;
-        listView = null;
-        messageAdapter = null;
+        cursorLayout.tearDown();
         cursorLayout = null;
         conversationLoadingIndicatorViewView = null;
         if (inputStateIndicator != null) {
@@ -773,7 +727,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
     @Override
     public void onShowSingleImage(Message message) {
-        listView.setEnabled(true);
     }
 
     @Override
@@ -784,34 +737,11 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
     @Override
     public void onHideSingleImage() {
         getControllerFactory().getNavigationController().setRightPage(Page.MESSAGE_STREAM, TAG);
-        listView.setEnabled(true);
     }
 
     @Override
     public void updateSingleImageReferences() {
-        listView.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (getControllerFactory() == null || getControllerFactory().isTornDown()) {
-                    return;
-                }
-                Message message = getControllerFactory().getSingleImageController().getMessage();
-                if (message == null) {
-                    getControllerFactory().getSingleImageController().setContainerOutOfScreen(true);
-                    return;
-                }
-                // Single image is visible
-                int messagePosition = messageStreamManager.getIndexOfMessage(message);
-                View messageView = getViewByPosition(messagePosition, listView);
-                if (messageView == null) {
-                    getControllerFactory().getSingleImageController().setContainerOutOfScreen(true);
-                    return;
-                }
-                final ImageView clickedImageView = ViewUtils.getView(messageView,
-                                                                     R.id.iv__row_conversation__message_image);
-                getControllerFactory().getSingleImageController().setViewReferences(clickedImageView);
-            }
-        }, getResources().getInteger(R.integer.framework_animation_duration_long));
+
     }
 
     private View getViewByPosition(int pos, ListView listView) {
@@ -861,9 +791,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
         extendedCursorContainer.close(true);
 
-        messageStreamManager.setConversation(toConversation,
-                                             getControllerFactory().getNavigationController().getCurrentPage() != Page.MESSAGE_STREAM);
-
         getControllerFactory().getConversationScreenController().setSingleConversation(toConversation.getType() == IConversation.Type.ONE_TO_ONE);
 
 
@@ -907,7 +834,7 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
 
                     cursorLayout.setVisibility(toConversation.isActive() ? View.VISIBLE : View.GONE);
-                    if (!inSplitPortraitMode() && listView.computeIsScrolledToBottom()) {
+                    if (!inSplitPortraitMode()) {
                         resetCursor();
                     }
 
@@ -1067,14 +994,12 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
     @Override
     public void onScrolledToBottom() {
         getStoreFactory().getInAppNotificationStore().onScrolledToBottom();
-        messageStreamManager.onScrolledToBottom(true);
         cursorLayout.showTopbar(false);
     }
 
     @Override
     public void onScrolledAwayFromBottom() {
         getStoreFactory().getInAppNotificationStore().onScrolledAwayFromBottom();
-        messageStreamManager.onScrolledToBottom(false);
         cursorLayout.showTopbar(typingIndicatorView.getVisibility() == View.GONE);
     }
 
@@ -1089,7 +1014,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
         if (keyboardIsVisible &&
             getControllerFactory().getFocusController().getCurrentFocus() == IFocusController.CONVERSATION_CURSOR &&
             !cursorLayout.isEditingMessage()) {
-            messageStreamManager.onCursorStateEdit();
             getControllerFactory().getNavigationController().setMessageStreamState(VoiceBarAppearance.MINI);
         }
 
@@ -1114,15 +1038,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
     @Override
     public void onEditTextHasChanged(int cursorPosition, String text) {
-        if (listView == null) {
-            return;
-        }
-        // this is needed to make sure that text is scrolled to bottom - on some devices
-        // the keyboard height changes while text is being entered
-        if (!cursorLayout.isEditingMessage()) {
-            messageStreamManager.onCursorStateEdit();
-        }
-
         if (inputStateIndicator != null) {
             if (text.isEmpty()) {
                 inputStateIndicator.textCleared();
@@ -1215,11 +1130,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
     @Override
     public void onScrollTo(Message message) {
-        if (listView != null) {
-            final int scrollPosition = messageStreamManager.getIndexOfMessage(message);
-            Timber.i("onScrollTo. Smooth scroll list to position %s", scrollPosition);
-            listView.smoothScrollToPosition(scrollPosition);
-        }
     }
 
     @Override
@@ -1247,11 +1157,8 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
         if (currentConversation == null || !currentConversation.isMemberOfConversation()) {
             cursorLayout.setVisibility(View.GONE);
-            ViewUtils.setMarginBottom(listView,
-                                      getResources().getDimensionPixelSize(R.dimen.cursor__list_view_footer_no_cursor__height));
         } else {
             cursorLayout.setVisibility(View.VISIBLE);
-            ViewUtils.setMarginBottom(listView, 0);
         }
     }
 
@@ -1276,13 +1183,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
         if (page == Page.MESSAGE_STREAM) {
             messagesListModelObserver.forceUpdate();
             cursorLayout.enableMessageWriting();
-        }
-        if (LayoutSpec.isPhone(getContext())) {
-            if (page == Page.MESSAGE_STREAM) {
-                messageStreamManager.resume();
-            } else {
-                messageStreamManager.pause();
-            }
         }
     }
 
@@ -1310,7 +1210,7 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
     @Override
     public int getUnreadMessageCount() {
-        return messageStreamManager.getUnreadMessageCount();
+        return 0;
     }
 
     @Override
@@ -1747,9 +1647,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
 
     @Override
     public void onCursorClicked() {
-        if (!cursorLayout.isEditingMessage()) {
-            listView.scrollToBottom();
-        }
     }
 
     @Override
@@ -1767,7 +1664,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
     @Override
     public void onClosedMessageEditing() {
         getControllerFactory().getConversationScreenController().setMessageBeingEdited(null);
-        messageAdapter.notifyDataSetChanged();
     }
 
     @Override
@@ -2264,7 +2160,6 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
         cursorLayout.editMessage(message);
 
         getControllerFactory().getConversationScreenController().setMessageBeingEdited(message);
-        messageAdapter.notifyDataSetChanged();
 
         // Add small delay so triggering keyboard works
         new Handler().postDelayed(new Runnable() {
@@ -2470,7 +2365,7 @@ public class ConversationFragment extends BaseFragment<ConversationFragment.Cont
         if (visible) {
             cursorLayout.showTopbar(false);
         } else {
-            cursorLayout.showTopbar(!listView.computeIsScrolledToBottom());
+//            cursorLayout.showTopbar(!listView.computeIsScrolledToBottom());
         }
     }
 
